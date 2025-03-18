@@ -1,12 +1,13 @@
 import { useEffect } from "react";
 import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
-import { $getRoot, $createTextNode, TextNode } from "lexical";
+import {
+  $getRoot,
+  $createTextNode,
+  TextNode,
+  ElementNode,
+  LexicalEditor,
+} from "lexical";
 import { $createEntityNode, $isEntityNode } from "./EntityNode";
-
-// Helper function to escape regex special characters
-function escapeRegExp(string: string): string {
-  return string.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
 
 interface EntityData {
   people: {
@@ -30,115 +31,126 @@ export function EntityDetectionPlugin({
 }: EntityDetectionPluginProps) {
   const [editor] = useLexicalComposerContext();
 
-  useEffect(() => {
-    // Register a listener for text changes
-    const removeUpdateListener = editor.registerUpdateListener(() => {
-      // Skip processing if the editor is composing
-      if (editor.isComposing()) {
-        return;
-      }
+  // Function to detect and mark entities in the editor content
+  const detectEntities = (editor: LexicalEditor) => {
+    editor.update(() => {
+      // Get all paragraphs in the editor
+      const root = $getRoot();
+      const paragraphs = root.getChildren();
 
-      // Process entities on the next frame to avoid disrupting typing
-      setTimeout(() => {
-        // Attempt to detect entities in the editor content
-        try {
-          editor.update(() => {
-            // Get the root element
-            const root = $getRoot();
+      // Process each paragraph
+      paragraphs.forEach((paragraph) => {
+        if (!(paragraph instanceof ElementNode)) return;
 
-            // Get all paragraphs
-            const paragraphs = root.getChildren();
+        // Get the text content of the paragraph
+        const text = paragraph.getTextContent();
+        if (!text.trim()) return;
 
-            // For each paragraph, check if it contains entity names
-            paragraphs.forEach((paragraph) => {
-              // Get the text content of the paragraph
-              const text = paragraph.getTextContent();
+        // Clear the paragraph
+        paragraph.clear();
 
-              // Skip empty paragraphs
-              if (!text.trim()) return;
+        // Process the text to find and mark entities
+        let remainingText = text;
+        let startIndex = 0;
 
-              // Log the paragraph text for debugging
-              console.log("Processing paragraph:", text);
+        // Keep processing until we've gone through the entire text
+        while (remainingText.length > 0) {
+          let entityFound = false;
+          let matchedEntity = null;
+          let matchedText = "";
+          let matchedType = "";
+          let matchIndex = Infinity;
 
-              // Get all text nodes in the paragraph (need to cast to any due to TypeScript limitations)
-              const textNodes = (paragraph as any).getChildren();
+          // Check for people entities
+          for (const person of entityData.people) {
+            const allNames = [person.name, ...person.variants].filter(Boolean);
 
-              // Process each text node
-              textNodes.forEach((node: any) => {
-                // Skip if not a text node or already an entity node
-                if (!(node instanceof TextNode) || $isEntityNode(node)) {
-                  return;
-                }
+            for (const name of allNames) {
+              const index = remainingText.indexOf(name);
+              if (index !== -1 && index < matchIndex) {
+                matchIndex = index;
+                matchedEntity = person;
+                matchedText = name;
+                matchedType = "people";
+                entityFound = true;
+              }
+            }
+          }
 
-                const nodeText = node.getTextContent();
+          // Check for organization entities
+          for (const org of entityData.organizations) {
+            const allNames = [org.name, ...org.variants].filter(Boolean);
 
-                // Check for entities in the text node
-                for (const type in entityData) {
-                  const entityType = type as keyof EntityData;
+            for (const name of allNames) {
+              const index = remainingText.indexOf(name);
+              if (index !== -1 && index < matchIndex) {
+                matchIndex = index;
+                matchedEntity = org;
+                matchedText = name;
+                matchedType = "organizations";
+                entityFound = true;
+              }
+            }
+          }
 
-                  entityData[entityType].forEach((entity) => {
-                    // Check if the entity name is in the text
-                    if (nodeText.includes(entity.name)) {
-                      console.log(`Found entity: ${entity.name} (${type})`);
+          // If an entity was found
+          if (entityFound && matchedEntity && matchIndex !== Infinity) {
+            // Add text before the entity if there is any
+            if (matchIndex > 0) {
+              const beforeText = remainingText.substring(0, matchIndex);
+              paragraph.append($createTextNode(beforeText));
+            }
 
-                      // Split the text node at the entity
-                      const parts = nodeText.split(entity.name);
+            // Add the entity node
+            paragraph.append(
+              $createEntityNode(
+                matchedText,
+                matchedType,
+                matchedEntity.name,
+                matchedEntity.info
+              )
+            );
 
-                      // If the entity is at the beginning
-                      if (parts[0] === "") {
-                        // Replace the text node with an entity node
-                        const entityNode = $createEntityNode(
-                          entity.name,
-                          entityType.toString(),
-                          entity.name,
-                          entity.info
-                        );
-
-                        // If there's text after the entity, add it as a new text node
-                        if (parts[1]) {
-                          const afterNode = $createTextNode(parts[1]);
-                          node.replace(entityNode);
-                          entityNode.insertAfter(afterNode);
-                        } else {
-                          node.replace(entityNode);
-                        }
-                      }
-                      // If the entity is in the middle or at the end
-                      else {
-                        // Create a text node for the text before the entity
-                        const beforeNode = $createTextNode(parts[0]);
-
-                        // Create an entity node for the entity
-                        const entityNode = $createEntityNode(
-                          entity.name,
-                          entityType.toString(),
-                          entity.name,
-                          entity.info
-                        );
-
-                        // Replace the original node with the before node
-                        node.replace(beforeNode);
-
-                        // Insert the entity node after the before node
-                        beforeNode.insertAfter(entityNode);
-
-                        // If there's text after the entity, add it as a new text node
-                        if (parts[1]) {
-                          const afterNode = $createTextNode(parts[1]);
-                          entityNode.insertAfter(afterNode);
-                        }
-                      }
-                    }
-                  });
-                }
-              });
-            });
-          });
-        } catch (error) {
-          console.error("Error processing entities:", error);
+            // Update the remaining text
+            remainingText = remainingText.substring(
+              matchIndex + matchedText.length
+            );
+          } else {
+            // No more entities found, add the remaining text
+            paragraph.append($createTextNode(remainingText));
+            remainingText = "";
+          }
         }
-      }, 0);
+      });
     });
+  };
+
+  useEffect(() => {
+    // Process initial content
+    setTimeout(() => {
+      detectEntities(editor);
+    }, 500);
+
+    // Listen for changes to the editor content
+    const removeUpdateListener = editor.registerUpdateListener(
+      ({ editorState, prevEditorState, tags }) => {
+        // Skip if this update was triggered by our own entity detection
+        if (tags.has("entity-detection")) return;
+
+        // Only process if the content has actually changed
+        if (
+          editorState.read(() => $getRoot().getTextContent()) ===
+          prevEditorState.read(() => $getRoot().getTextContent())
+        ) {
+          return;
+        }
+
+        // Detect entities after a short delay to avoid disrupting typing
+        setTimeout(() => {
+          detectEntities(editor);
+        }, 200);
+      }
+    );
 
     return removeUpdateListener;
   }, [editor, entityData]);

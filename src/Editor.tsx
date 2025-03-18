@@ -11,6 +11,7 @@ import {
   $createParagraphNode,
   $createTextNode,
   EditorState,
+  NodeKey,
 } from "lexical";
 
 import { EntityNode } from "./EntityNode";
@@ -210,7 +211,8 @@ export function Editor() {
         italic: "editor-text-italic",
         underline: "editor-text-underline",
       },
-      entity: "entity", // Add styling for entity nodes
+      // Define the entity theme class explicitly
+      entity: "entity",
     },
     onError: (error: Error) => console.error(error),
     nodes: [EntityNode], // Register our custom EntityNode

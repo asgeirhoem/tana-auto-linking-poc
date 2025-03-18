@@ -48,15 +48,24 @@ export class EntityNode extends TextNode {
   // Create the DOM element for this node
   createDOM(config: EditorConfig): HTMLElement {
     const dom = super.createDOM(config);
+
+    // Apply entity styling
+    dom.style.backgroundColor = "#fff3cd";
+    dom.style.borderBottom = "1px dashed #ffc107";
+    dom.style.padding = "0 2px";
+    dom.style.borderRadius = "2px";
+    dom.style.cursor = "pointer";
+
+    // Add entity class
     dom.classList.add("entity");
+
+    // Add data attributes for entity information
     dom.dataset.entity = this.__entityType;
     dom.dataset.name = this.__entityName;
     dom.dataset.info = this.__entityInfo;
+
     return dom;
   }
-
-  // We're not implementing updateDOM to avoid TypeScript errors
-  // In a real implementation, we would properly handle DOM updates
 
   // Required for serialization
   exportJSON(): SerializedEntityNode {
