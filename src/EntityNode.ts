@@ -4,6 +4,12 @@ import {
   LexicalNode,
   SerializedTextNode,
   TextNode,
+  $createTextNode,
+  $isRangeSelection,
+  $getSelection,
+  COMMAND_PRIORITY_EDITOR,
+  KEY_ARROW_RIGHT_COMMAND,
+  createCommand,
 } from "lexical";
 
 // Define the serialized version of our node for persistence
@@ -13,6 +19,11 @@ export type SerializedEntityNode = SerializedTextNode & {
   entityName: string;
   entityInfo: string;
 };
+
+// Command to insert a space after an entity
+export const INSERT_SPACE_AFTER_ENTITY_COMMAND = createCommand(
+  "INSERT_SPACE_AFTER_ENTITY"
+);
 
 // Our custom EntityNode extends TextNode
 export class EntityNode extends TextNode {
@@ -49,12 +60,20 @@ export class EntityNode extends TextNode {
   createDOM(config: EditorConfig): HTMLElement {
     const dom = super.createDOM(config);
 
-    // Apply entity styling
-    dom.style.backgroundColor = "#fff3cd";
-    dom.style.borderBottom = "1px dashed #ffc107";
-    dom.style.padding = "0 2px";
-    dom.style.borderRadius = "2px";
+    // Apply entity styling with extremely prominent colors
+    dom.style.backgroundColor = "#ff0"; // Pure yellow
+    dom.style.border = "3px solid #f90"; // Thicker orange border all around
+    dom.style.padding = "2px 4px"; // More padding
+    dom.style.margin = "0 2px"; // Add margin
+    dom.style.borderRadius = "4px"; // Larger border radius
     dom.style.cursor = "pointer";
+    dom.style.fontWeight = "bold"; // Make text bold
+    dom.style.color = "#000"; // Ensure text is black for contrast
+    dom.style.display = "inline-block"; // Make it a block element
+    dom.style.boxShadow = "0 2px 4px rgba(0,0,0,0.3)"; // Add stronger shadow
+    dom.style.position = "relative"; // For z-index to work
+    dom.style.zIndex = "1"; // Ensure it's above other content
+    dom.style.textDecoration = "none"; // Remove any text decoration
 
     // Add entity class
     dom.classList.add("entity");
@@ -64,7 +83,52 @@ export class EntityNode extends TextNode {
     dom.dataset.name = this.__entityName;
     dom.dataset.info = this.__entityInfo;
 
+    // Add inline CSS to ensure styles are applied
+    const styleTag = document.createElement("style");
+    styleTag.textContent = `
+      .entity {
+        background-color: #ff0 !important;
+        border: 3px solid #f90 !important;
+        padding: 2px 4px !important;
+        margin: 0 2px !important;
+        border-radius: 4px !important;
+        cursor: pointer !important;
+        font-weight: bold !important;
+        color: #000 !important;
+        display: inline-block !important;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.3) !important;
+        position: relative !important;
+        z-index: 1 !important;
+        text-decoration: none !important;
+      }
+    `;
+    document.head.appendChild(styleTag);
+
     return dom;
+  }
+
+  // Override key handling to insert space after entity when at the end
+  insertNewAfter(selection: any, restoreSelection = true): TextNode {
+    // Create a space node with two spaces to ensure visibility
+    const spaceNode = $createTextNode("  ");
+
+    // Insert it after this entity node
+    this.insertAfter(spaceNode);
+
+    // Move selection to after the first space
+    if (restoreSelection) {
+      spaceNode.select(1, 1);
+
+      // Force focus on the editor
+      setTimeout(() => {
+        const editorElement = document.querySelector("[contenteditable=true]");
+        if (editorElement) {
+          (editorElement as HTMLElement).focus();
+        }
+      }, 0);
+    }
+
+    return spaceNode;
   }
 
   // Required for serialization

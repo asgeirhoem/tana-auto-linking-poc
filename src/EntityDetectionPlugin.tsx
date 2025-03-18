@@ -4,8 +4,9 @@ import {
   $getRoot,
   $createTextNode,
   TextNode,
-  ElementNode,
-  LexicalEditor,
+  $isTextNode,
+  $isParagraphNode,
+  ParagraphNode,
 } from "lexical";
 import { $createEntityNode, $isEntityNode } from "./EntityNode";
 
@@ -16,6 +17,11 @@ interface EntityData {
     info: string;
   }[];
   organizations: {
+    name: string;
+    variants: string[];
+    info: string;
+  }[];
+  places: {
     name: string;
     variants: string[];
     info: string;
@@ -31,128 +37,192 @@ export function EntityDetectionPlugin({
 }: EntityDetectionPluginProps) {
   const [editor] = useLexicalComposerContext();
 
-  // Function to detect and mark entities in the editor content
-  const detectEntities = (editor: LexicalEditor) => {
-    editor.update(() => {
-      // Get all paragraphs in the editor
-      const root = $getRoot();
-      const paragraphs = root.getChildren();
+  const findAllOccurrences = (text: string, searchString: string) => {
+    const indices: number[] = [];
+    const lowerText = text.toLowerCase();
+    const lowerSearchString = searchString.toLowerCase();
+    let index = lowerText.indexOf(lowerSearchString);
 
-      // Process each paragraph
-      paragraphs.forEach((paragraph) => {
-        if (!(paragraph instanceof ElementNode)) return;
+    while (index !== -1) {
+      indices.push(index);
+      index = lowerText.indexOf(
+        lowerSearchString,
+        index + lowerSearchString.length
+      );
+    }
 
-        // Get the text content of the paragraph
-        const text = paragraph.getTextContent();
-        if (!text.trim()) return;
-
-        // Clear the paragraph
-        paragraph.clear();
-
-        // Process the text to find and mark entities
-        let remainingText = text;
-        let startIndex = 0;
-
-        // Keep processing until we've gone through the entire text
-        while (remainingText.length > 0) {
-          let entityFound = false;
-          let matchedEntity = null;
-          let matchedText = "";
-          let matchedType = "";
-          let matchIndex = Infinity;
-
-          // Check for people entities
-          for (const person of entityData.people) {
-            const allNames = [person.name, ...person.variants].filter(Boolean);
-
-            for (const name of allNames) {
-              const index = remainingText.indexOf(name);
-              if (index !== -1 && index < matchIndex) {
-                matchIndex = index;
-                matchedEntity = person;
-                matchedText = name;
-                matchedType = "people";
-                entityFound = true;
-              }
-            }
-          }
-
-          // Check for organization entities
-          for (const org of entityData.organizations) {
-            const allNames = [org.name, ...org.variants].filter(Boolean);
-
-            for (const name of allNames) {
-              const index = remainingText.indexOf(name);
-              if (index !== -1 && index < matchIndex) {
-                matchIndex = index;
-                matchedEntity = org;
-                matchedText = name;
-                matchedType = "organizations";
-                entityFound = true;
-              }
-            }
-          }
-
-          // If an entity was found
-          if (entityFound && matchedEntity && matchIndex !== Infinity) {
-            // Add text before the entity if there is any
-            if (matchIndex > 0) {
-              const beforeText = remainingText.substring(0, matchIndex);
-              paragraph.append($createTextNode(beforeText));
-            }
-
-            // Add the entity node
-            paragraph.append(
-              $createEntityNode(
-                matchedText,
-                matchedType,
-                matchedEntity.name,
-                matchedEntity.info
-              )
-            );
-
-            // Update the remaining text
-            remainingText = remainingText.substring(
-              matchIndex + matchedText.length
-            );
-          } else {
-            // No more entities found, add the remaining text
-            paragraph.append($createTextNode(remainingText));
-            remainingText = "";
-          }
-        }
-      });
-    });
+    return indices;
   };
 
-  useEffect(() => {
-    // Process initial content
-    setTimeout(() => {
-      detectEntities(editor);
-    }, 500);
+  const findEntitiesInText = (text: string) => {
+    const entities: {
+      index: number;
+      length: number;
+      entity: any;
+      type: string;
+      text: string;
+    }[] = [];
 
-    // Listen for changes to the editor content
-    const removeUpdateListener = editor.registerUpdateListener(
-      ({ editorState, prevEditorState, tags }) => {
-        // Skip if this update was triggered by our own entity detection
-        if (tags.has("entity-detection")) return;
+    (["people", "organizations", "places"] as const).forEach((type) => {
+      entityData[type].forEach((entityItem) => {
+        const allNames = [entityItem.name, ...entityItem.variants].filter(
+          Boolean
+        );
+        allNames.forEach((name) => {
+          if (!name || !name.trim()) return;
 
-        // Only process if the content has actually changed
+          const indices = findAllOccurrences(text, name);
+          indices.forEach((index) => {
+            const actualText = text.substring(index, index + name.length);
+            entities.push({
+              index,
+              length: name.length,
+              entity: entityItem,
+              type,
+              text: actualText,
+            });
+          });
+        });
+      });
+    });
+
+    entities.sort((a, b) => a.index - b.index);
+
+    const filteredEntities = entities.filter((entity, index) => {
+      for (let i = 0; i < index; i++) {
+        const prevEntity = entities[i];
         if (
-          editorState.read(() => $getRoot().getTextContent()) ===
-          prevEditorState.read(() => $getRoot().getTextContent())
+          entity.index >= prevEntity.index &&
+          entity.index < prevEntity.index + prevEntity.length
         ) {
+          return false;
+        }
+      }
+      return true;
+    });
+
+    return filteredEntities;
+  };
+
+  // Register a node transform for text nodes
+  useEffect(() => {
+    // This transform will be called for every text node in the editor
+    const removeTextTransform = editor.registerNodeTransform(
+      TextNode,
+      (textNode) => {
+        // Skip if this is already part of an entity node
+        if (textNode.getParent() && $isEntityNode(textNode.getParent())) {
           return;
         }
 
-        // Detect entities after a short delay to avoid disrupting typing
-        setTimeout(() => {
-          detectEntities(editor);
-        }, 200);
+        const text = textNode.getTextContent();
+        if (!text.trim()) return;
+
+        const entities = findEntitiesInText(text);
+        if (entities.length === 0) return;
+
+        // Get the parent paragraph
+        const paragraph = textNode.getParent();
+        if (!paragraph || !$isParagraphNode(paragraph)) return;
+
+        // Process the text node
+        let lastIndex = 0;
+
+        // Create a temporary array to hold the new nodes
+        const newNodes = [];
+
+        entities.forEach((entity) => {
+          if (entity.index > lastIndex) {
+            // Add text before the entity
+            newNodes.push(
+              $createTextNode(text.substring(lastIndex, entity.index))
+            );
+          }
+
+          // Create and add the entity node
+          const entityNode = $createEntityNode(
+            entity.text,
+            entity.type,
+            entity.entity.name,
+            entity.entity.info
+          );
+          newNodes.push(entityNode);
+
+          lastIndex = entity.index + entity.length;
+        });
+
+        // Add any remaining text
+        if (lastIndex < text.length) {
+          newNodes.push($createTextNode(text.substring(lastIndex)));
+        }
+
+        // Replace the original text node with the new nodes
+        if (newNodes.length > 0) {
+          // Insert all new nodes before the text node
+          for (let i = 0; i < newNodes.length; i++) {
+            textNode.insertBefore(newNodes[i]);
+          }
+          // Remove the original text node
+          textNode.remove();
+        }
       }
     );
 
-    return removeUpdateListener;
+    // Also register a transform for paragraphs to handle newly created paragraphs
+    const removeParagraphTransform = editor.registerNodeTransform(
+      ParagraphNode,
+      (node) => {
+        // Check if this paragraph has only text nodes (no entity nodes)
+        let hasOnlyTextNodes = false;
+        const children = node.getChildren();
+
+        if (children.length > 0) {
+          hasOnlyTextNodes = children.every(
+            (child) => $isTextNode(child) && !$isEntityNode(child)
+          );
+        }
+
+        // If it has only text nodes, process it
+        if (hasOnlyTextNodes) {
+          const text = node.getTextContent();
+          if (!text.trim()) return;
+
+          const entities = findEntitiesInText(text);
+          if (entities.length === 0) return;
+
+          // Clear and rebuild the paragraph
+          node.clear();
+          let lastIndex = 0;
+
+          entities.forEach((entity) => {
+            if (entity.index > lastIndex) {
+              node.append(
+                $createTextNode(text.substring(lastIndex, entity.index))
+              );
+            }
+
+            const entityNode = $createEntityNode(
+              entity.text,
+              entity.type,
+              entity.entity.name,
+              entity.entity.info
+            );
+
+            node.append(entityNode);
+            lastIndex = entity.index + entity.length;
+          });
+
+          if (lastIndex < text.length) {
+            node.append($createTextNode(text.substring(lastIndex)));
+          }
+        }
+      }
+    );
+
+    return () => {
+      removeTextTransform();
+      removeParagraphTransform();
+    };
   }, [editor, entityData]);
 
   return null;
